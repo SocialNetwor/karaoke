@@ -180,7 +180,7 @@ button{cursor:pointer}
     <button class="iconbtn" id="btnSet" title="설정">⚙</button>
   </div>
   <div class="searchrow">
-    <input id="q" type="search" placeholder="곡명 또는 가수 (예: 땡벌)" autocomplete="off" enterkeyhint="search">
+    <input id="q" type="search" placeholder="곡명, 가수, 또는 유튜브 링크" autocomplete="off" enterkeyhint="search">
     <button class="sbtn" id="btnSearch">검색</button>
     <button class="qbtn" id="btnQuick">바로예약</button>
   </div>
@@ -190,7 +190,8 @@ button{cursor:pointer}
 <main class="body" id="results">
   <div class="note">
     부르고 싶은 곡을 검색해 보세요.<br>
-    <b>바로예약</b>을 누르면 검색 없이 1등 영상이 곧장 예약됩니다.
+    <b>바로예약</b>을 누르면 검색 없이 1등 영상이 곧장 예약됩니다.<br><br>
+    유튜브 <b>링크를 그대로 붙여넣어도</b> 예약됩니다.
   </div>
 </main>
 
@@ -278,6 +279,32 @@ const S={
 };
 const saveQueue=()=>{LS.set('queue',S.queue);renderQBar()};
 
+/* ── 링크 직접 넣기 (API 키 없이도 동작) ── */
+function parseYTId(str){
+  str=(str||'').trim();
+  if(/^[A-Za-z0-9_-]{11}$/.test(str))return str;
+  const m=str.match(/(?:youtu\.be\/|[?&]v=|\/embed\/|\/shorts\/|\/live\/)([A-Za-z0-9_-]{11})/);
+  return m?m[1]:null;
+}
+async function addByUrl(str,playNow){
+  const id=parseYTId(str);
+  if(!id)return false;
+  let title='유튜브 영상', ch='';
+  try{
+    const r=await fetch('https://www.youtube.com/oembed?format=json&url='+encodeURIComponent('https://www.youtube.com/watch?v='+id));
+    if(r.ok){const j=await r.json();title=j.title||title;ch=j.author_name||''}
+  }catch(e){}
+  const rows=[{id,title,ch,dur:0,th:'https://i.ytimg.com/vi/'+id+'/mqdefault.jpg'}];
+  enqueue(rows,0,title,S.ver,playNow);
+  $('#q').value='';$('#q').blur();
+  if(playNow){openStage();playIdx(0)}
+  return true;
+}
+function openYTSearch(term){
+  const q=buildQuery(term||$('#q').value||'',S.ver);
+  window.open('https://www.youtube.com/results?search_query='+encodeURIComponent(q),'_blank','noopener');
+}
+
 /* ── 검색 ───────────────────────────────── */
 const cacheKey=q=>'c_'+q;
 function cacheGet(q){const c=LS.get(cacheKey(q),null);if(!c)return null;if(Date.now()-c.t>7*864e5)return null;return c.r}
@@ -349,6 +376,7 @@ async function doSearch(term,opts){
   opts=opts||{};
   term=(term||'').trim();
   if(!term){toast('곡명을 입력하세요');return null}
+  if(parseYTId(term)){ await addByUrl(term); toast('링크를 예약했습니다'); return null; }
   const query=buildQuery(term,S.ver);
   S.lastQuery=term;
   if(!opts.silent){
@@ -356,13 +384,28 @@ async function doSearch(term,opts){
   }
   const rows=await searchYT(query);
   if(!rows){
-    if(!opts.silent) $('#results').innerHTML='<div class="note">검색 결과를 가져오지 못했습니다.<br><b>설정</b>에서 유튜브 API 키를 넣으면 안정적으로 동작합니다.</div>';
-    else toast('검색에 실패했습니다');
+    if(!opts.silent) renderFail(term);
+    else toast('검색에 실패했습니다 — 설정에서 API 키를 넣어주세요');
     return null;
   }
   S.results=rows;
   if(!opts.silent)renderResults(rows,query);
   return rows;
+}
+function renderFail(term){
+  const box=$('#results');
+  box.innerHTML='';
+  const d=document.createElement('div');
+  d.className='note';
+  d.innerHTML='<b>검색 서버에 연결하지 못했습니다.</b><br>'
+    +'유튜브 API 키를 넣으면 바로 해결됩니다. 무료이고 5분이면 끝납니다.<br><br>'
+    +'키 없이 쓰시려면, 아래 버튼으로 유튜브에서 직접 찾은 뒤<br>영상 <b>링크를 복사해서 위 검색창에 붙여넣으세요.</b> 그대로 예약됩니다.'
+    +'<div class="btnrow" style="justify-content:center;margin-top:16px">'
+    +'<button class="btn pri" id="fSet">API 키 넣기</button>'
+    +'<button class="btn" id="fYT">유튜브에서 찾기</button></div>';
+  box.appendChild(d);
+  $('#fSet',d).onclick=openSettings;
+  $('#fYT',d).onclick=()=>openYTSearch(term);
 }
 function renderResults(rows,query){
   const box=$('#results');
@@ -394,6 +437,7 @@ function enqueue(rows,idx,term,verId,front){
 async function quickReserve(){
   const term=$('#q').value.trim();
   if(!term){toast('곡명을 입력하세요');return}
+  if(parseYTId(term)){ await addByUrl(term); toast('링크를 예약했습니다'); return; }
   $('#btnQuick').textContent='…';
   const rows=await doSearch(term,{silent:true});
   $('#btnQuick').textContent='바로예약';
@@ -444,8 +488,13 @@ function openSettings(){
   sheet(
    '<h2>설정</h2><p class="sd">유튜브 API 키를 넣으면 검색이 빠르고 안정적입니다. 무료이고 하루 100번쯤 검색할 수 있습니다.</p>'
   +'<div class="field"><label>유튜브 데이터 API 키</label><input id="sKey" type="text" placeholder="AIza…" value="'+esc(S.key)+'">'
-  +'<small>Google Cloud Console → 새 프로젝트 → <b>YouTube Data API v3</b> 사용 설정 → 사용자 인증 정보에서 API 키 생성. '
-  +'키를 남이 못 쓰게 하려면 <b>HTTP 리퍼러 제한</b>에 이 앱 주소를 넣으세요.</small></div>'
+  +'<small><b>발급 순서</b><br>'
+  +'① <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">console.cloud.google.com</a> 접속 (구글 로그인)<br>'
+  +'② 위쪽 프로젝트 선택 → 새 프로젝트 → 이름 아무거나 → 만들기<br>'
+  +'③ <a href="https://console.cloud.google.com/apis/library" target="_blank" rel="noopener">API 라이브러리</a>에서 <b>YouTube Data API v3</b> 검색 → 사용<br>'
+  +'④ <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">사용자 인증 정보</a> → 만들기 → <b>API 키</b><br>'
+  +'⑤ 나온 AIza… 를 복사해 위 칸에 붙여넣고 저장<br><br>'
+  +'요금은 들지 않습니다. 하루 100번쯤 검색할 수 있고, 한 번 찾은 검색어는 저장해 두어 다시 쓸 때는 소모되지 않습니다.</small></div>'
   +'<div class="field"><label>대체 검색 서버 (API 키가 없을 때, 한 줄에 하나)</label>'
   +'<textarea id="sInv" rows="4">'+esc(S.invs.join('\n'))+'</textarea>'
   +'<small>공개 서버라 자주 멈춥니다. 되도록 API 키를 쓰세요.</small></div>'
